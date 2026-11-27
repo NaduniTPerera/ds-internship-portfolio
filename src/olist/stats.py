@@ -161,6 +161,30 @@ def adjust_pvalues(p_values: np.ndarray, alpha: float = 0.05) -> pd.DataFrame:
                          "sig_bh": reject_bh})
 
 
+def effect_by_group(df: pd.DataFrame, group_col: str, flag_col: str, value_col: str,
+                    min_per_side: int = 30) -> pd.DataFrame:
+    """Difference in means (flag=True minus flag=False) inside each group.
+
+    Groups with fewer than `min_per_side` rows on either side are skipped
+    (their estimates would be too noisy). Returns one row per kept group with
+    the means, difference, Welch 95% CI and rank-biserial r.
+    """
+    rows = []
+    for group, g in df.groupby(group_col, observed=True):
+        yes = g.loc[g[flag_col], value_col].to_numpy(dtype=float)
+        no = g.loc[~g[flag_col], value_col].to_numpy(dtype=float)
+        if len(yes) < min_per_side or len(no) < min_per_side:
+            continue
+        ci = welch_t_interval(yes, no)
+        rows.append({
+            group_col: group, "n_flag": len(yes), "n_other": len(no),
+            "mean_flag": yes.mean(), "mean_other": no.mean(),
+            "diff": ci["estimate"], "ci_low": ci["ci_low"], "ci_high": ci["ci_high"],
+            "rank_biserial": mann_whitney(yes, no)["rank_biserial"],
+        })
+    return pd.DataFrame(rows)
+
+
 def describe_rank_biserial(r: float) -> str:
     """Rough size label for |r| (0.1 small, 0.3 medium, 0.5 large)."""
     size = abs(r)

@@ -92,3 +92,19 @@ def test_adjust_pvalues_bonferroni_and_bh():
     assert adjusted["sig_raw"].sum() == 3
     assert adjusted["sig_bonferroni"].sum() == 1
     assert adjusted["sig_bh"].sum() == 3
+
+
+def test_effect_by_group_skips_small_groups_and_finds_reversal():
+    from olist.stats import effect_by_group
+    rng = np.random.default_rng(3)
+    rows = []
+    # group A: flag lowers the value by 2; group B: flag RAISES it by 1; group C: too small
+    for group, shift, n in [("A", -2.0, 200), ("B", 1.0, 200), ("C", -2.0, 10)]:
+        for flag in (True, False):
+            values = rng.normal(4 + (shift if flag else 0), 0.5, n)
+            rows += [{"g": group, "flag": flag, "v": v} for v in values]
+    result = effect_by_group(pd.DataFrame(rows), "g", "flag", "v", min_per_side=30)
+    assert result["g"].tolist() == ["A", "B"]                      # C skipped
+    assert result.set_index("g").loc["A", "diff"] == pytest.approx(-2.0, abs=0.15)
+    assert result.set_index("g").loc["B", "diff"] == pytest.approx(1.0, abs=0.15)
+    assert (result["ci_low"] < result["diff"]).all()

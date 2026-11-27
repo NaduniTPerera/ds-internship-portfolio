@@ -13,6 +13,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402, F401  (used inside statsmodels formulas: np.log1p)
 import pandas as pd  # noqa: E402
 
 from ds_intern.config import PROJECT_ROOT  # noqa: E402
@@ -24,6 +25,7 @@ from olist.stats import (  # noqa: E402
     chi_square,
     describe_cramers_v,
     describe_rank_biserial,
+    effect_by_group,
     format_p,
     mann_whitney,
     mean_difference,
@@ -454,7 +456,186 @@ def run_states() -> None:
                 results["margin_rate_spearman"], path)
 
 
-QUESTIONS = {"q1": run_q1, "bootstrap": run_bootstrap, "states": run_states}
+# --------------------------------------------------------------------------- Task 6
+MIN_PER_SIDE = 30   # late AND on-time orders needed for a group to be analysed
+
+
+def simpson_results(orders: pd.DataFrame) -> dict:
+    import statsmodels.formula.api as smf
+
+    d = scored_orders(orders)
+    crude = mean_difference(d.loc[d["is_late"], "review_score"],
+                            d.loc[~d["is_late"], "review_score"])["diff"]
+    regions = effect_by_group(d, "customer_region", "is_late", "review_score", MIN_PER_SIDE)
+    categories = effect_by_group(d, "category", "is_late", "review_score", MIN_PER_SIDE)
+
+    # composition: does the confounder differ between late and on-time orders?
+    region_mix = d.groupby("customer_region").agg(
+        orders=("is_late", "size"), late_pct=("is_late", "mean"),
+        on_time_score=("review_score", lambda s: s[~d.loc[s.index, "is_late"]].mean()))
+
+    model_data = d.assign(is_late=d["is_late"].astype(int))
+    fits = {
+        "crude": smf.ols("review_score ~ is_late", model_data).fit(cov_type="HC3"),
+        "region": smf.ols("review_score ~ is_late + C(customer_region)",
+                          model_data).fit(cov_type="HC3"),
+        "region + category": smf.ols("review_score ~ is_late + C(customer_region) "
+                                     "+ C(category)", model_data).fit(cov_type="HC3"),
+        "region + category + price, freight, items": smf.ols(
+            "review_score ~ is_late + C(customer_region) + C(category) + np.log1p(price) "
+            "+ np.log1p(freight) + n_items", model_data).fit(cov_type="HC3"),
+    }
+    coefs = pd.DataFrame([{
+        "model": name, "is_late_coef": fit.params["is_late"],
+        "ci_low": fit.conf_int().loc["is_late", 0], "ci_high": fit.conf_int().loc["is_late", 1],
+        "n": int(fit.nobs)} for name, fit in fits.items()])
+    n_categories_total = d["category"].nunique()
+    return {"crude": crude, "regions": regions, "categories": categories,
+            "region_mix": region_mix, "coefs": coefs,
+            "n_categories_total": n_categories_total}
+
+
+def plot_simpson(r: dict, top_categories: int = 20) -> plt.Figure:
+    charts.apply_style()
+    regions = r["regions"].sort_values("diff")
+    cats = (r["categories"].sort_values("n_flag", ascending=False).head(top_categories)
+            .sort_values("diff"))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7.5),
+                             gridspec_kw={"width_ratios": [1, 1.4]})
+    for ax, data, label, title in [
+        (axes[0], regions, "customer_region", "By customer region"),
+        (axes[1], cats, "category", f"By category (the {top_categories} with most late orders)"),
+    ]:
+        y = range(len(data))
+        ax.errorbar(data["diff"], list(y),
+                    xerr=[data["diff"] - data["ci_low"], data["ci_high"] - data["diff"]],
+                    fmt="o", color=charts.BLUE, elinewidth=1.5, markersize=6, capsize=0)
+        ax.axvline(0, color=charts.INK_2, linewidth=1, label="No effect (0)")
+        ax.axvline(r["crude"], color=charts.ORANGE, linewidth=1.5,
+                   label=f"All orders ({r['crude']:.2f})")
+        ax.set_yticks(list(y), [f"{g} (late n={n:,})" for g, n in
+                                zip(data[label], data["n_flag"], strict=True)])
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel("Late - on-time mean score (stars, 95% CI)")
+        ax.set_xlim(-3.2, 0.3)
+        ax.grid(axis="y", visible=False)
+    # the area between -1 and 0 is empty in every row; stop just left of the 0 line
+    axes[1].legend(loc="lower right", bbox_to_anchor=(0.89, 0.0))
+    low, high = r["categories"]["diff"].max(), r["categories"]["diff"].min()
+    fig.suptitle(f"Inside every region and every large category, late orders score "
+                 f"{abs(low):.1f}-{abs(high):.1f} stars lower: no Simpson's paradox",
+                 x=0.01, ha="left", fontsize=13, fontweight="bold", color=charts.INK)
+    fig.tight_layout()
+    return fig
+
+
+def simpson_markdown(r: dict) -> str:
+    regions, cats, coefs, mix = r["regions"], r["categories"], r["coefs"], r["region_mix"]
+    n_cat = len(cats)
+    neg = int((cats["diff"] < 0).sum())
+    ci_below_zero = int((cats["ci_high"] < 0).sum())
+    adjusted = coefs.iloc[-1]
+    lines = [
+        "# Day 3 - Task 6: Simpson's paradox check (does the effect hold inside groups?)",
+        "",
+        "Code: `simpson_results` in `src/olist/analysis.py`, `effect_by_group` in "
+        "`src/olist/stats.py`.",
+        "",
+        "## Confounding in plain words",
+        "",
+        "A **confounder** is a third factor that affects *both* things we compare. Region is "
+        "a candidate: some regions have many more late orders (Task 5), and customers in "
+        "different regions might also rate differently for other reasons (expectations, "
+        "product mix, sellers). If so, part of 'late orders score lower' could really be "
+        "'orders from that region score lower', with lateness just tagging along. "
+        "Product category is a similar candidate: bulky items (furniture) are late more "
+        "often *and* might disappoint more anyway.",
+        "",
+        "**Simpson's paradox** is the extreme case: a trend in the pooled data disappears or "
+        "*reverses* inside every group, because the groups are mixed in different "
+        "proportions. Classic example: a hospital with a higher overall death rate can be "
+        "better for both mild and severe patients, if it treats far more severe cases.",
+        "",
+        "**Check:** compute the late-vs-on-time difference *inside* each region and each "
+        "product category, then adjust for all of them at once with a regression.",
+        "",
+        f"## 1. Inside each region (pooled difference: {r['crude']:.2f} stars)",
+        "",
+        "| Region | Late orders | On-time orders | Late % | Mean late | Mean on time "
+        "| Difference [95% CI] | Rank-biserial r |",
+        "|---|---:|---:|---:|---:|---:|---|---:|",
+        *[f"| {g.customer_region} | {g.n_flag:,} | {g.n_other:,} "
+          f"| {100 * mix.loc[g.customer_region, 'late_pct']:.1f} | {g.mean_flag:.2f} "
+          f"| {g.mean_other:.2f} | {g.diff:.2f} [{g.ci_low:.2f}, {g.ci_high:.2f}] "
+          f"| {g.rank_biserial:.2f} |" for g in regions.sort_values("diff").itertuples()],
+        "",
+        "Region **is** linked to lateness (the late rate varies a lot), and the on-time "
+        "baseline score varies a little between regions. So it is a plausible confounder. "
+        "But **in every region, late orders score far lower**, and every confidence interval "
+        "is well below 0.",
+        "",
+        "## 2. Inside each product category",
+        "",
+        f"{n_cat} of {r['n_categories_total']} categories have at least {MIN_PER_SIDE} late "
+        f"and {MIN_PER_SIDE} on-time reviewed orders (smaller ones are too noisy to test "
+        "alone, but they are included in the regression below).",
+        "",
+        f"- Late orders score lower in **{neg} of {n_cat}** categories.",
+        f"- The 95% CI is entirely below 0 in **{ci_below_zero} of {n_cat}**.",
+        f"- The difference ranges from {cats['diff'].min():.2f} "
+        f"({cats.loc[cats['diff'].idxmin(), 'category']}) to {cats['diff'].max():.2f} "
+        f"({cats.loc[cats['diff'].idxmax(), 'category']}) stars.",
+        "",
+        "![Effect inside groups](../figures/day3_simpson_check.png)",
+        "",
+        "## 3. Adjusting for everything at once (linear regression)",
+        "",
+        "`review_score ~ is_late + controls` with robust (HC3) standard errors. The "
+        "`is_late` coefficient is the late-vs-on-time difference *after* holding the "
+        "controls fixed. Treating the 1-5 score as numeric is a simplification, used here "
+        "only to compare the raw and adjusted effect.",
+        "",
+        "| Controls | is_late effect (stars) | 95% CI | Orders |",
+        "|---|---:|---|---:|",
+        *[f"| {c.model} | {c.is_late_coef:.3f} | [{c.ci_low:.3f}, {c.ci_high:.3f}] "
+          f"| {c.n:,} |" for c in coefs.itertuples()],
+        "",
+        f"Adding region, category, price, freight and number of items moves the effect from "
+        f"{coefs.iloc[0]['is_late_coef']:.2f} to {adjusted['is_late_coef']:.2f} stars, a "
+        f"change of {abs(adjusted['is_late_coef'] - coefs.iloc[0]['is_late_coef']):.2f}. "
+        "These variables are **not** what explains the effect.",
+        "",
+        "## Conclusion",
+        "",
+        "- **No Simpson's paradox:** the effect has the same direction and a similar size "
+        "inside every region and every large category, and it survives adjustment.",
+        "- **Confounding by region, category, price or order size is small.**",
+        "- **Still not proof of causation.** We can only adjust for variables we *have*. An "
+        "unmeasured factor, for example an unreliable seller who is *both* slow and sends "
+        "poor-quality products, could still explain part of the gap. A randomised experiment "
+        "(Task 7) is the way to measure the causal effect of delivery promises.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def run_simpson() -> None:
+    results = simpson_results(load_orders())
+    fig = plot_simpson(results)
+    fig.savefig(charts.FIGURE_DIR / "day3_simpson_check.png", bbox_inches="tight")
+    plt.close(fig)
+    path = REPORT_DIR / "q3_simpson_check.md"
+    path.write_text(simpson_markdown(results), encoding="utf-8")
+    cats = results["categories"]
+    logger.info("Simpson: crude %.2f; regions %s; categories %d (neg %d, max %.2f); "
+                "adjusted %.3f -> %s", results["crude"],
+                results["regions"]["diff"].round(2).tolist(), len(cats),
+                int((cats["diff"] < 0).sum()), cats["diff"].max(),
+                results["coefs"].iloc[-1]["is_late_coef"], path)
+
+
+QUESTIONS = {"q1": run_q1, "bootstrap": run_bootstrap, "states": run_states,
+             "simpson": run_simpson}
 
 
 def main(argv: list[str] | None = None) -> int:
