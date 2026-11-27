@@ -67,4 +67,16 @@ uv run python -m ingest.download
 
 # create the tables (safe to re-run)
 docker exec -i nyc_taxi_pg psql -U postgres -d nyc_taxi < sql/001_schema.sql
+
+# load zones + all six months (about 10 minutes; safe to re-run)
+uv run python -m ingest.load_postgres
+# or reload a single month
+uv run python -m ingest.load_postgres --months 2024-03
 ```
+
+The loader reads each Parquet file in batches of 500,000 rows and streams them into
+Postgres with `COPY`. Each month is loaded in one transaction: delete that month's rows,
+insert the new ones, and record the run in `load_batch`. Re-running replaces a month
+instead of duplicating it. If a run fails halfway, the transaction rolls back.
+Trips whose pickup time falls outside the file's month are dropped and counted
+in `load_batch.rows_dropped`.

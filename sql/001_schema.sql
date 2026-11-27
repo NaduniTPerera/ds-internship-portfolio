@@ -135,3 +135,16 @@ CREATE TABLE IF NOT EXISTS fact_trips (
 
 -- Needed so "delete this month, then reload it" is fast.
 CREATE INDEX IF NOT EXISTS ix_fact_trips_source_month ON fact_trips (source_month);
+
+
+-- ---------------------------------------------------------------------
+-- load_batch: one row per loaded month (audit log for the loader).
+-- Re-loading a month updates its row instead of adding a new one.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS load_batch (
+    source_month  DATE         PRIMARY KEY,
+    source_file   TEXT         NOT NULL,
+    rows_loaded   BIGINT       NOT NULL,
+    rows_dropped  BIGINT       NOT NULL,   -- pickup outside the file's month
+    loaded_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
+);

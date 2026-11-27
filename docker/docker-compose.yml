@@ -13,6 +13,10 @@ services:
     container_name: nyc_taxi_pg
     restart: unless-stopped
 
+    # Docker's default /dev/shm is 64 MB, too small for VACUUM / parallel queries
+    # on millions of rows ("could not resize shared memory segment").
+    shm_size: 256mb
+
     # Credentials come from .env (never committed). See .env.example.
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
