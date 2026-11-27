@@ -52,4 +52,19 @@ Host port 5433 is used so it does not clash with a local Postgres on 5432.
 
 | Day | Topic | Status |
 |-----|-------|--------|
-| 1   | NYC Taxi data warehouse: repo scaffold, Postgres 16 in Docker | In progress |
+| 1   | NYC Taxi data warehouse: repo scaffold, Postgres 16 in Docker, download script, star schema | In progress |
+
+## Day 1: star schema
+
+![Star schema](reports/day1_schema.png)
+
+`fact_trips` (one row per trip) links to `dim_vendor`, `dim_payment_type`, `dim_date` and
+`dim_zone`. `dim_zone` is used twice, for pickup and dropoff. DDL: [`sql/001_schema.sql`](sql/001_schema.sql).
+
+```bash
+# download raw data (skips files that already exist)
+uv run python -m ingest.download
+
+# create the tables (safe to re-run)
+docker exec -i nyc_taxi_pg psql -U postgres -d nyc_taxi < sql/001_schema.sql
+```
