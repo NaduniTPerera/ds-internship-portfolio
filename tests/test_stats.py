@@ -4,6 +4,7 @@ import pytest
 from scipy import stats as scipy_stats
 
 from olist.stats import (
+    adjust_pvalues,
     bootstrap_mean_diff,
     chi_square,
     format_p,
@@ -63,3 +64,31 @@ def test_bootstrap_is_reproducible_and_close_to_t_interval():
     t = welch_t_interval(x, y)
     assert a["std_error"] == pytest.approx(t["std_error"], rel=0.1)        # large samples
     assert len(a["diffs"]) == 2_000
+
+
+def test_two_by_two_uses_fisher_for_small_counts():
+    from olist.stats import two_by_two_test
+    assert two_by_two_test(2, 10, 30, 100)["test"] == "fisher"          # expected < 5
+    big = two_by_two_test(100, 1000, 150, 1000)
+    assert big["test"] == "chi-square"
+    assert big["p_value"] < 0.01
+
+
+def test_pairwise_tests_cover_every_pair():
+    from olist.stats import pairwise_proportion_tests
+    counts = pd.DataFrame({"events": [10, 20, 30], "total": [100, 100, 100]},
+                          index=["A", "B", "C"])
+    pairs = pairwise_proportion_tests(counts)
+    assert len(pairs) == 3                                               # 3 choose 2
+    assert pairs.iloc[0][["group_a", "group_b"]].tolist() == ["A", "B"]
+    assert pairs.iloc[0]["diff"] == pytest.approx(-0.10)
+
+
+def test_adjust_pvalues_bonferroni_and_bh():
+    adjusted = adjust_pvalues(np.array([0.01, 0.02, 0.03, 0.5]))
+    assert adjusted["p_bonferroni"].tolist() == pytest.approx([0.04, 0.08, 0.12, 1.0])
+    # BH: p_(i) * m / i, made monotone -> 0.04, 0.04, 0.04, 0.5
+    assert adjusted["p_bh"].tolist() == pytest.approx([0.04, 0.04, 0.04, 0.5])
+    assert adjusted["sig_raw"].sum() == 3
+    assert adjusted["sig_bonferroni"].sum() == 1
+    assert adjusted["sig_bh"].sum() == 3

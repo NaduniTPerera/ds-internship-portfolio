@@ -114,6 +114,53 @@ def welch_t_interval(x: np.ndarray, y: np.ndarray, confidence: float = 0.95) -> 
     }
 
 
+def two_by_two_test(events_a: int, n_a: int, events_b: int, n_b: int) -> dict:
+    """Compare two proportions with a 2x2 test.
+
+    Chi-square (no continuity correction) when every expected count is >= 5,
+    otherwise Fisher's exact test (exact, valid for small counts).
+    """
+    observed = np.array([[events_a, n_a - events_a], [events_b, n_b - events_b]])
+    expected = stats.contingency.expected_freq(observed)
+    if (expected >= 5).all():
+        chi2, p_value, _, _ = stats.chi2_contingency(observed, correction=False)
+        test = "chi-square"
+    else:
+        _, p_value = stats.fisher_exact(observed)
+        test = "fisher"
+    return {"p_value": float(p_value), "test": test}
+
+
+def pairwise_proportion_tests(counts: pd.DataFrame, events: str = "events",
+                              total: str = "total") -> pd.DataFrame:
+    """All pairwise 2x2 tests between the groups (rows) of `counts`.
+
+    counts: one row per group (index = group name) with event and total columns.
+    Returns one row per pair: rates, difference, raw p-value and test used.
+    """
+    groups = list(counts.index)
+    rows = []
+    for i, a in enumerate(groups):
+        for b in groups[i + 1:]:
+            ea, na = int(counts.at[a, events]), int(counts.at[a, total])
+            eb, nb = int(counts.at[b, events]), int(counts.at[b, total])
+            result = two_by_two_test(ea, na, eb, nb)
+            rows.append({"group_a": a, "group_b": b, "rate_a": ea / na, "rate_b": eb / nb,
+                         "diff": ea / na - eb / nb, **result})
+    return pd.DataFrame(rows)
+
+
+def adjust_pvalues(p_values: np.ndarray, alpha: float = 0.05) -> pd.DataFrame:
+    """Bonferroni and Benjamini-Hochberg adjusted p-values (statsmodels)."""
+    from statsmodels.stats.multitest import multipletests
+    p = np.asarray(p_values, dtype=float)
+    reject_bonf, p_bonf, _, _ = multipletests(p, alpha=alpha, method="bonferroni")
+    reject_bh, p_bh, _, _ = multipletests(p, alpha=alpha, method="fdr_bh")
+    return pd.DataFrame({"p_raw": p, "p_bonferroni": p_bonf, "p_bh": p_bh,
+                         "sig_raw": p < alpha, "sig_bonferroni": reject_bonf,
+                         "sig_bh": reject_bh})
+
+
 def describe_rank_biserial(r: float) -> str:
     """Rough size label for |r| (0.1 small, 0.3 medium, 0.5 large)."""
     size = abs(r)

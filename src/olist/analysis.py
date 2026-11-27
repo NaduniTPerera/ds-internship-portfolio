@@ -19,6 +19,7 @@ from ds_intern.config import PROJECT_ROOT  # noqa: E402
 from eda import charts  # noqa: E402  (Day 2 palette and style, reused)
 from olist.order_table import load_orders  # noqa: E402
 from olist.stats import (  # noqa: E402
+    adjust_pvalues,
     bootstrap_mean_diff,
     chi_square,
     describe_cramers_v,
@@ -26,6 +27,7 @@ from olist.stats import (  # noqa: E402
     format_p,
     mann_whitney,
     mean_difference,
+    pairwise_proportion_tests,
     welch_t_interval,
 )
 
@@ -294,7 +296,165 @@ def run_bootstrap() -> None:
                 b["ci_low"], b["ci_high"], t["ci_low"], t["ci_high"], b["seconds"], path)
 
 
-QUESTIONS = {"q1": run_q1, "bootstrap": run_bootstrap}
+# --------------------------------------------------------------------------- Task 5
+def states_results(orders: pd.DataFrame) -> dict:
+    from statsmodels.stats.proportion import proportion_confint
+
+    by_state = orders.groupby("customer_state").agg(
+        total=("is_late", "size"), events=("is_late", "sum"),
+        promised_days=("estimated_delivery_date",
+                       lambda s: (s - orders.loc[s.index, "purchase_date"]).dt.days.median()),
+        actual_days=("delivery_days", "median"),
+        actual_iqr=("delivery_days", lambda s: s.quantile(0.75) - s.quantile(0.25)),
+    )
+    by_state[["total", "events"]] = by_state[["total", "events"]].astype(int)
+    by_state["rate"] = by_state["events"] / by_state["total"]
+    low, high = proportion_confint(by_state["events"], by_state["total"], method="wilson")
+    by_state["ci_low"], by_state["ci_high"] = low, high
+    by_state["margin_days"] = by_state["promised_days"] - by_state["actual_days"]
+    by_state = by_state.sort_values("rate")
+
+    table = pd.crosstab(orders["customer_state"], orders["is_late"])
+    overall = chi_square(table)
+
+    pairs = pairwise_proportion_tests(by_state[["events", "total"]])
+    pairs = pd.concat([pairs, adjust_pvalues(pairs["p_value"].to_numpy())], axis=1)
+    corr = by_state[["rate", "margin_days"]].corr(method="spearman").iat[0, 1]
+    return {"by_state": by_state, "overall": overall, "pairs": pairs,
+            "overall_rate": orders["is_late"].mean(), "margin_rate_spearman": corr}
+
+
+def plot_states(r: dict) -> plt.Figure:
+    charts.apply_style()
+    s = r["by_state"]
+    fig, ax = plt.subplots(figsize=(10, 8))
+    y = range(len(s))
+    ax.errorbar(s["rate"] * 100, list(y),
+                xerr=[(s["rate"] - s["ci_low"]) * 100, (s["ci_high"] - s["rate"]) * 100],
+                fmt="o", color=charts.BLUE, ecolor=charts.BLUE, elinewidth=1.5,
+                markersize=6, capsize=0)
+    ax.axvline(r["overall_rate"] * 100, color=charts.INK_2, linewidth=1)
+    ax.annotate(f"all orders {r['overall_rate'] * 100:.1f}%",
+                xy=(r["overall_rate"] * 100, len(s) - 0.5), xytext=(4, 0),
+                textcoords="offset points", fontsize=9, color=charts.INK_2)
+    ax.set_yticks(list(y), [f"{st} (n={n:,})" for st, n in zip(s.index, s["total"],
+                                                                strict=True)])
+    ax.set_xlabel("% of orders delivered late (95% Wilson interval)")
+    ax.set_title("Late-delivery rate ranges from about 3% to 21% by customer state")
+    ax.grid(axis="y", visible=False)
+    fig.tight_layout()
+    return fig
+
+
+def states_markdown(r: dict) -> str:
+    s, o, pairs = r["by_state"], r["overall"], r["pairs"]
+    n_pairs = len(pairs)
+    sig = {k: int(pairs[k].sum()) for k in ["sig_raw", "sig_bonferroni", "sig_bh"]}
+    top = pairs[pairs["sig_bonferroni"]].assign(abs_diff=lambda d: d["diff"].abs())
+    top = top.sort_values("abs_diff", ascending=False).head(10)
+    tests_used = pairs["test"].value_counts().to_dict()
+    lines = [
+        "# Day 3 - Task 5: Is lateness different across customer states?",
+        "",
+        f"Data: all {int(s['total'].sum()):,} delivered orders (a review is not needed for "
+        "lateness). Code: `states_results` in `src/olist/analysis.py`.",
+        "",
+        "## 1. Overall test",
+        "",
+        "- **H0:** the late rate is the same in all 27 states. "
+        "**H1:** at least one state differs. α = 0.05.",
+        "- **Test:** chi-square test of independence on the 27 × 2 table (state × late), "
+        "because both variables are categorical.",
+        f"- **Assumption:** expected counts ≥ 5. {o['cells_expected_below_5']} of 54 cells "
+        f"are below 5 (smallest {o['min_expected']:.1f}, the tiny states RR and AP). That is "
+        "under the usual 20% limit (Cochran's rule), so the test is valid.",
+        "",
+        f"**Result:** χ² = {o['chi2']:,.0f}, df = {o['dof']}, p {format_p(o['p_value'])}, "
+        f"Cramér's V = {o['cramers_v']:.3f} ({describe_cramers_v(o['cramers_v'])}). "
+        "**Reject H0:** lateness depends on the customer's state. The effect size is modest "
+        "because most orders come from a few big states with similar rates.",
+        "",
+        "![Late rate by state](../figures/day3_late_rate_by_state.png)",
+        "",
+        "## 2. Pairwise tests and multiple comparisons",
+        "",
+        f"Every pair of states was compared: **{n_pairs} tests** (2×2 chi-square, or "
+        "Fisher's exact test when an expected count is below 5. Used: "
+        f"{', '.join(f'{k} {v}' for k, v in tests_used.items())}).",
+        "",
+        f"**Why correct?** At α = 0.05, each test has a 5% false-alarm rate. Even if no "
+        f"states differed, about {0.05 * n_pairs:.0f} of {n_pairs} tests would be "
+        "'significant' by chance.",
+        "",
+        "| Method | Rule | Significant pairs |",
+        "|---|---|---:|",
+        f"| No correction | p < 0.05 | {sig['sig_raw']} |",
+        f"| Bonferroni | p < 0.05 / {n_pairs} = {0.05 / n_pairs:.6f} (controls the chance of "
+        f"*any* false alarm) | {sig['sig_bonferroni']} |",
+        f"| Benjamini-Hochberg | false discovery rate 5% (≈ 5% of the reported pairs may be "
+        f"false alarms) | {sig['sig_bh']} |",
+        "",
+        "Bonferroni is the strictest and safest for a headline claim. BH keeps more real "
+        "differences and is the usual choice when exploring many pairs.",
+        "",
+        "**Largest differences that survive Bonferroni:**",
+        "",
+        "| State A | Late % | State B | Late % | Difference (pts) | Bonferroni p |",
+        "|---|---:|---|---:|---:|---:|",
+        *[f"| {p.group_a} | {100 * p.rate_a:.1f} | {p.group_b} | {100 * p.rate_b:.1f} "
+          f"| {100 * p.diff:+.1f} | {format_p(p.p_bonferroni)} |" for p in top.itertuples()],
+        "",
+        "## 3. Late rate by state",
+        "",
+        "| State | Orders | Late | Late % | 95% CI | Median promised days | "
+        "Median actual days | Spread of actual days (IQR) |",
+        "|---|---:|---:|---:|---|---:|---:|---:|",
+        # itertuples keeps each column's dtype (iterrows would turn the counts into floats)
+        *[f"| {row.Index} | {row.total:,} | {row.events:,} | {100 * row.rate:.1f} "
+          f"| [{100 * row.ci_low:.1f}, {100 * row.ci_high:.1f}] | {row.promised_days:.0f} "
+          f"| {row.actual_days:.0f} | {row.actual_iqr:.0f} |"
+          for row in s.sort_values("rate", ascending=False).itertuples()],
+        "",
+        "## Interpretation",
+        "",
+        "'Late' is measured against the **promised** date, not against raw delivery speed. "
+        "Two things explain the differences between states:",
+        "",
+        "1. **How generous the estimate is.** Remote northern states (AM, AP, RO, AC) have "
+        "some of the *longest* deliveries (median 18-26 days) but the *lowest* late rates, "
+        "because they are promised 38-48 days. Across states, a larger median margin "
+        f"(promised - actual days) goes with a lower late rate (Spearman ρ = "
+        f"{r['margin_rate_spearman']:.2f}).",
+        "2. **How predictable delivery is.** The highest late rates (AL, MA, SE, CE, BA, RJ) "
+        "are *not* explained by tighter typical margins: their median margin (10-13 days) is "
+        "similar to SP, MG and PR (11-14 days), which are late only 4-5% of the time. "
+        "Instead, their delivery times are more spread out (IQR 10-15 days vs 6-8 days), so "
+        "more orders fall past the promised date.",
+        "",
+        "- **Small states have wide intervals** (e.g. RR with 41 orders: 12% late, 95% CI "
+        "5-26%). Their rates are uncertain, so few of their pairwise tests survive correction.",
+        "- **Business implication:** the same fixed buffer would not fix every state. "
+        "Unpredictable routes need either a larger buffer or better logistics.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def run_states() -> None:
+    results = states_results(load_orders())
+    fig = plot_states(results)
+    fig.savefig(charts.FIGURE_DIR / "day3_late_rate_by_state.png", bbox_inches="tight")
+    plt.close(fig)
+    path = REPORT_DIR / "q2_lateness_by_state.md"
+    path.write_text(states_markdown(results), encoding="utf-8")
+    p = results["pairs"]
+    logger.info("States: chi2 p=%s V=%.3f; pairs %d, sig raw %d, bonf %d, BH %d; rho %.2f -> %s",
+                format_p(results["overall"]["p_value"]), results["overall"]["cramers_v"],
+                len(p), p["sig_raw"].sum(), p["sig_bonferroni"].sum(), p["sig_bh"].sum(),
+                results["margin_rate_spearman"], path)
+
+
+QUESTIONS = {"q1": run_q1, "bootstrap": run_bootstrap, "states": run_states}
 
 
 def main(argv: list[str] | None = None) -> int:
