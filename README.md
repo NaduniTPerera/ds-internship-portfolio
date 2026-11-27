@@ -54,6 +54,7 @@ Host port 5433 is used so it does not clash with a local Postgres on 5432.
 |-----|-------|--------|
 | 1   | NYC Taxi data warehouse: Postgres 16 in Docker, download + chunked loader, star schema, 10 KPI queries, DuckDB benchmark, indexing | Done |
 | 2   | Data quality audit and EDA: profiling, 16 pandera rules, CI quality gate, cleaning policy, 9 EDA charts, rule tests | Done |
+| 3   | Statistics and experimentation (Olist): hypothesis tests, effect sizes, bootstrap, multiple comparisons, Simpson's paradox, power analysis | Done |
 
 ## Day 1: star schema
 
@@ -162,3 +163,32 @@ Key findings:
   pickups, and fare follows duration (0.94) and distance (0.91) with a $70 JFK flat-fare band.
 
 ![Hour x weekday demand](reports/figures/day2_04_hour_weekday_heatmap.png)
+
+## Day 3: Does late delivery hurt customer satisfaction? (Olist)
+
+Data: [Olist Brazilian E-Commerce](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce)
+(9 tables, about 100k orders, 2016-2018). Download the zip from Kaggle into `data/raw/olist/` and unzip it.
+
+```bash
+uv run python -m olist.load               # 1. 9 tables -> Postgres database "olist"
+uv run python -m olist.order_table        # 2. order-level analytical table
+uv run python -m olist.analysis q1        # 3. late vs on-time review scores
+uv run python -m olist.analysis bootstrap # 4. bootstrap CI vs t-interval
+uv run python -m olist.analysis states    # 5. lateness by state + multiple comparisons
+uv run python -m olist.analysis simpson   # 6. Simpson's paradox / confounding check
+uv run python -m olist.experiment         # 7. power analysis + experiment plan
+```
+
+**Reuse:** the Day 1 Postgres code (connect, run a SQL file, bulk `COPY`) was moved into
+[`src/ds_intern/db.py`](src/ds_intern/db.py), and both the taxi loader and the Olist loader use it.
+The Day 2 profiler checks the new order table.
+
+| Task | Report | Result |
+|---|---|---|
+| 1. Load + ER diagram | [`er_diagram.md`](reports/day3/er_diagram.md) | 9 tables, keys and 6 enforced foreign keys, chosen after checking the data |
+| 2. Order table | [`order_table.md`](reports/day3/order_table.md) | 96,470 delivered orders, 6.8% late |
+| 3. Late vs reviews | [`q1_late_vs_reviews.md`](reports/day3/q1_late_vs_reviews.md) | Late orders score **2.02 stars lower** (Mann-Whitney r = -0.64, large; Cramér's V = 0.42) |
+| 4. Bootstrap CI | [`q1_bootstrap_ci.md`](reports/day3/q1_bootstrap_ci.md) | 95% CI [-2.06, -1.98], matching the Welch t-interval to within 0.001 |
+| 5. Lateness by state | [`q2_lateness_by_state.md`](reports/day3/q2_lateness_by_state.md) | 3-21% late by state; 124 of 351 pairs differ after Bonferroni |
+| 6. Simpson's paradox | [`q3_simpson_check.md`](reports/day3/q3_simpson_check.md) | Same effect inside every region and category; adjusted effect -2.01 |
+| 7. Experiment design | [`q4_experiment_plan.md`](reports/day3/q4_experiment_plan.md) | 2,593 reviewed orders per group for 0.1 stars, but the realistic effect is 0.016-0.05 stars |
