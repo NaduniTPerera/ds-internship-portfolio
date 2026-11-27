@@ -80,3 +80,25 @@ insert the new ones, and record the run in `load_batch`. Re-running replaces a m
 instead of duplicating it. If a run fails halfway, the transaction rolls back.
 Trips whose pickup time falls outside the file's month are dropped and counted
 in `load_batch.rows_dropped`.
+
+## Day 1: KPI queries
+
+[`sql/002_kpis.sql`](sql/002_kpis.sql) answers 10 business questions with CTEs and window
+functions (`LAG`, `RANK`, `DENSE_RANK`, rolling `AVG`, `PERCENTILE_CONT`). Run them in
+DBeaver, or:
+
+```bash
+docker exec -i nyc_taxi_pg psql -U postgres -d nyc_taxi < sql/002_kpis.sql
+```
+
+Key findings (Jan-Jun 2024, 20.3M trips):
+
+- Revenue grew from $79.5M (Jan) to $98.9M (Jun). The biggest jump was March (+21% MoM),
+  and the peak was May ($105.7M).
+- JFK and LaGuardia are the top 2 pickup zones by revenue (20% of all revenue together).
+- Airport trips are 9.8% of trips but 26.8% of revenue.
+- Credit-card riders tip about 22% of the fare. Cash tips are not recorded by TLC.
+- The busiest hour of the week is Thursday 18:00, and weekday evening rush hours dominate.
+- Median trip time is 11.7 min from Manhattan pickups and 33.7 min from Queens pickups.
+- No zone with meaningful revenue fell more than 20% from Jan to Jun. Only 3 Staten Island
+  zones with 1-9 trips a month did.
