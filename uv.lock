@@ -100,18 +100,18 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pandas", specifier = ">=2.2" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
-    { name = "pyarrow", specifier = ">=17.0" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "pandas", specifier = "==3.1.1" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.3.9" },
+    { name = "pyarrow", specifier = "==26.0.1" },
+    { name = "python-dotenv", specifier = "==1.2.4" },
+    { name = "sqlalchemy", specifier = "==2.1.9" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "ipykernel", specifier = ">=6.29" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "ruff", specifier = ">=0.6" },
+    { name = "ipykernel", specifier = "==7.4.0" },
+    { name = "pytest", specifier = "==9.2.0" },
+    { name = "ruff", specifier = "==0.17.6" },
 ]
 
 [[package]]

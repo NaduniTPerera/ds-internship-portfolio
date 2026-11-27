@@ -32,8 +32,24 @@ cp .env.example .env
 uv run pytest
 ```
 
+## Database (PostgreSQL 16 in Docker)
+
+```bash
+# start (data is stored in the named volume ds-intern_pgdata)
+docker compose --env-file .env -f docker/docker-compose.yml up -d
+
+# check status - should say "(healthy)"
+docker ps --filter name=nyc_taxi_pg
+
+# stop (data is kept)
+docker compose --env-file .env -f docker/docker-compose.yml down
+```
+
+Connection: `localhost:5433`, database `nyc_taxi`, user and password from `.env`.
+Host port 5433 is used so it does not clash with a local Postgres on 5432.
+
 ## Progress
 
 | Day | Topic | Status |
 |-----|-------|--------|
-| 1   | NYC Taxi data warehouse: setup | In progress |
+| 1   | NYC Taxi data warehouse: repo scaffold, Postgres 16 in Docker | In progress |
