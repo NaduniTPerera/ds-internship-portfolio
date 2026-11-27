@@ -227,6 +227,7 @@ def bootstrap_markdown(r: dict) -> str:
     boot, t = r["bootstrap"], r["t"]
     width_b = boot["ci_high"] - boot["ci_low"]
     width_t = t["ci_high"] - t["ci_low"]
+    gap = max(abs(boot["ci_low"] - t["ci_low"]), abs(boot["ci_high"] - t["ci_high"]))
     return "\n".join([
         "# Day 3 - Task 4: Bootstrap 95% CI for the difference in mean review score",
         "",
@@ -264,8 +265,8 @@ def bootstrap_markdown(r: dict) -> str:
         "",
         "## Comparison",
         "",
-        f"- **The two intervals agree** to within {max(abs(boot['ci_low'] - t['ci_low']), abs(boot['ci_high'] - t['ci_high'])):.3f} "
-        "stars at either end. Their standard errors match too.",
+        f"- **The two intervals agree** to within {gap:.3f} stars at either end. "
+        "Their standard errors match too.",
         "- **Why they agree:** review scores are far from normal, but the t-interval is about "
         "the *mean*. With thousands of orders per group, the Central Limit Theorem makes the "
         "sample mean almost normal (the bootstrap histogram is bell-shaped). The bootstrap "
