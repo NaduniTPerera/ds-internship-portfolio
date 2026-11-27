@@ -12,12 +12,16 @@ RAW_DATA_DIR = PROJECT_ROOT / os.getenv("RAW_DATA_DIR", "data/raw")
 PROCESSED_DATA_DIR = PROJECT_ROOT / os.getenv("PROCESSED_DATA_DIR", "data/processed")
 
 
-def pg_params() -> dict[str, str]:
-    """Connection settings for the Postgres warehouse (for psycopg.connect)."""
+def pg_params(dbname: str | None = None) -> dict[str, str]:
+    """Connection settings for Postgres (for psycopg.connect).
+
+    dbname defaults to POSTGRES_DB (the Day 1 taxi warehouse); pass another name,
+    e.g. "olist", to use a different database in the same Postgres server.
+    """
     return {
         "host": os.getenv("POSTGRES_HOST", "localhost"),
         "port": os.getenv("POSTGRES_PORT", "5433"),
-        "dbname": os.getenv("POSTGRES_DB", "nyc_taxi"),
+        "dbname": dbname or os.getenv("POSTGRES_DB", "nyc_taxi"),
         "user": os.getenv("POSTGRES_USER", "postgres"),
         "password": os.getenv("POSTGRES_PASSWORD", ""),
     }

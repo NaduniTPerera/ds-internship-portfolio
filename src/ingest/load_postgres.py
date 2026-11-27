@@ -16,7 +16,6 @@ How it works:
 """
 
 import argparse
-import io
 import logging
 import sys
 import time
@@ -27,10 +26,10 @@ import pandas as pd
 import psycopg
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 
-from ds_intern.config import RAW_DATA_DIR, pg_params
+from ds_intern import db
+from ds_intern.config import RAW_DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +61,6 @@ COLUMN_MAP = {
     "total_amount": "total_amount",
 }
 FACT_COLUMNS = [*COLUMN_MAP.values(), "pickup_date_key", "source_month"]
-COPY_SQL = f"COPY fact_trips ({', '.join(FACT_COLUMNS)}) FROM STDIN WITH (FORMAT csv)"
-CSV_OPTIONS = pacsv.WriteOptions(include_header=False)
 
 
 def next_month(month_start: date) -> date:
@@ -136,10 +133,7 @@ def load_month(conn: psycopg.Connection, path: Path, month_start: date, batch_si
 
         for i, batch in enumerate(parquet.iter_batches(batch_size=batch_size), start=1):
             clean, n_dropped = transform_batch(batch, month_start)
-            buffer = io.BytesIO()
-            pacsv.write_csv(clean, buffer, CSV_OPTIONS)
-            with cur.copy(COPY_SQL) as copy:
-                copy.write(buffer.getvalue())
+            db.copy_arrow(cur, "fact_trips", clean, FACT_COLUMNS)
             loaded += clean.num_rows
             dropped += n_dropped
             logger.info("%s: batch %d copied (%d rows so far)", month_start, i, loaded)
@@ -189,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Missing files in %s: %s. Run ingest.download first.", RAW_DATA_DIR, missing)
         return 1
 
-    with psycopg.connect(**pg_params(), autocommit=True) as conn:
+    with db.connect() as conn:
         load_zones(conn, RAW_DATA_DIR / ZONE_FILE)
         total = sum(load_month(conn, files[m], m, args.batch_size) for m in months)
 
