@@ -53,6 +53,7 @@ Host port 5433 is used so it does not clash with a local Postgres on 5432.
 | Day | Topic | Status |
 |-----|-------|--------|
 | 1   | NYC Taxi data warehouse: Postgres 16 in Docker, download + chunked loader, star schema, 10 KPI queries, DuckDB benchmark, indexing | Done |
+| 2   | Data quality audit and EDA: profiling, 16 pandera rules, CI quality gate, cleaning policy, 9 EDA charts, rule tests | Done |
 
 ## Day 1: star schema
 
@@ -126,3 +127,38 @@ the columnar Parquet files, while Postgres reads whole rows. Details:
 A covering index `(pickup_datetime) INCLUDE (total_amount)` cut a one-week dashboard query
 from 23.6 s to 1.0 s (Index Only Scan). A plain index on `pickup_datetime` was not used for
 that query. Details: [`reports/day1_index.md`](reports/day1_index.md).
+
+## Day 2: Data quality audit and EDA
+
+The audit runs on the **raw** Parquet files, exactly as TLC published them.
+
+```bash
+uv run python -m quality.profile        # 1. profile every column -> reports/day2/profile.md
+uv run python -m quality.schema         # 2-3. 16 rules -> reports/day2/validation_report.md
+uv run python -m quality.run_checks --month 2024-01 --max-failure-pct 5   # 4. CI gate
+uv run python -m quality.clean          # 5. cleaning policy -> data/processed/*.parquet
+uv run jupyter lab notebooks/day2_eda.ipynb                                # 6. EDA
+uv run pytest                           # 7. tests
+```
+
+| Step | Code | Output |
+|---|---|---|
+| Profiling (dtype, null %, distinct, min/max, top values) | [`src/quality/profile.py`](src/quality/profile.py) | [`profile.md`](reports/day2/profile.md) |
+| 16 validation rules as a pandera `DataFrameSchema` (13 error, 3 warn) | [`src/quality/schema.py`](src/quality/schema.py) | [`validation_report.md`](reports/day2/validation_report.md) |
+| CI quality gate: exit 0 pass, 1 failure rate above threshold, 2 cannot run | [`src/quality/run_checks.py`](src/quality/run_checks.py) | exit code (+ optional JSON) |
+| Cleaning policy (drop / cap / impute / keep-and-flag) | [`src/quality/clean.py`](src/quality/clean.py) | [`cleaning_policy.md`](reports/day2/cleaning_policy.md) |
+| EDA: 9 charts, each with a takeaway | [`src/eda/charts.py`](src/eda/charts.py) | [`day2_eda.ipynb`](notebooks/day2_eda.ipynb), `reports/figures/day2_*.png` |
+| Rule tests: one good row and one bad row per rule | [`tests/test_schema_rules.py`](tests/test_schema_rules.py) | 37 tests in total |
+
+Key findings:
+
+- About 4-5% of raw rows per month break at least one error rule. The main causes are
+  zero distance (1.8%), negative fares from refunds (1.6%), and 0 or 7+ passengers (1.1%).
+- "Total = sum of components" fails for 29% of rows, but **the money is correct**. Vendor 1
+  records the $2.50 congestion surcharge in both `extra` and `congestion_surcharge`, and
+  Flex Fare trips leave the surcharge column NULL. This rule is therefore a warning, not an error.
+- Cleaning keeps 96.7% of rows (19,656,373). Every error rule passes on the cleaned data.
+- EDA: card riders tip about 25%, demand peaks on Thursday at 18:00, Manhattan has 89% of
+  pickups, and fare follows duration (0.94) and distance (0.91) with a $70 JFK flat-fare band.
+
+![Hour x weekday demand](reports/figures/day2_04_hour_weekday_heatmap.png)
