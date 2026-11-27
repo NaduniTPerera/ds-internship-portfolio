@@ -58,6 +58,62 @@ def mean_difference(x: np.ndarray, y: np.ndarray) -> dict:
     }
 
 
+def bootstrap_mean_diff(x: np.ndarray, y: np.ndarray, n_resamples: int = 10_000,
+                        confidence: float = 0.95, seed: int = 42,
+                        batch_size: int = 200) -> dict:
+    """Percentile bootstrap CI for mean(x) - mean(y), written with NumPy only.
+
+    Each resample draws len(x) values from x and len(y) values from y WITH
+    replacement (the two groups are resampled independently) and stores the
+    difference of their means. Resamples run in batches so memory stays small
+    (batch_size x len(y) indices at a time instead of n_resamples x len(y)).
+    """
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    rng = np.random.default_rng(seed)
+    diffs = np.empty(n_resamples)
+    for start in range(0, n_resamples, batch_size):
+        b = min(batch_size, n_resamples - start)
+        x_idx = rng.integers(0, len(x), size=(b, len(x)), dtype=np.int32)
+        y_idx = rng.integers(0, len(y), size=(b, len(y)), dtype=np.int32)
+        diffs[start:start + b] = x[x_idx].mean(axis=1) - y[y_idx].mean(axis=1)
+
+    tail = (1 - confidence) / 2 * 100
+    low, high = np.percentile(diffs, [tail, 100 - tail])
+    return {
+        "estimate": float(x.mean() - y.mean()),
+        "ci_low": float(low),
+        "ci_high": float(high),
+        "std_error": float(diffs.std(ddof=1)),
+        "n_resamples": n_resamples,
+        "confidence": confidence,
+        "diffs": diffs,
+    }
+
+
+def welch_t_interval(x: np.ndarray, y: np.ndarray, confidence: float = 0.95) -> dict:
+    """Analytical CI for mean(x) - mean(y) with Welch's t (unequal variances).
+
+    SE = sqrt(s_x^2 / n_x + s_y^2 / n_y); degrees of freedom from the
+    Welch-Satterthwaite formula; CI = diff +/- t_crit * SE.
+    """
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    n_x, n_y = len(x), len(y)
+    v_x, v_y = x.var(ddof=1) / n_x, y.var(ddof=1) / n_y
+    se = np.sqrt(v_x + v_y)
+    dof = (v_x + v_y) ** 2 / (v_x ** 2 / (n_x - 1) + v_y ** 2 / (n_y - 1))
+    t_crit = stats.t.ppf(1 - (1 - confidence) / 2, dof)
+    diff = x.mean() - y.mean()
+    return {
+        "estimate": float(diff),
+        "ci_low": float(diff - t_crit * se),
+        "ci_high": float(diff + t_crit * se),
+        "std_error": float(se),
+        "dof": float(dof),
+        "t_crit": float(t_crit),
+        "confidence": confidence,
+    }
+
+
 def describe_rank_biserial(r: float) -> str:
     """Rough size label for |r| (0.1 small, 0.3 medium, 0.5 large)."""
     size = abs(r)

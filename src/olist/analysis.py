@@ -7,6 +7,7 @@ Usage:
 import argparse
 import logging
 import sys
+import time
 
 import matplotlib
 
@@ -18,12 +19,14 @@ from ds_intern.config import PROJECT_ROOT  # noqa: E402
 from eda import charts  # noqa: E402  (Day 2 palette and style, reused)
 from olist.order_table import load_orders  # noqa: E402
 from olist.stats import (  # noqa: E402
+    bootstrap_mean_diff,
     chi_square,
     describe_cramers_v,
     describe_rank_biserial,
     format_p,
     mann_whitney,
     mean_difference,
+    welch_t_interval,
 )
 
 logger = logging.getLogger(__name__)
@@ -185,7 +188,112 @@ def run_q1() -> None:
                 results["chi_square"]["cramers_v"], path)
 
 
-QUESTIONS = {"q1": run_q1}
+# --------------------------------------------------------------------------- Task 4
+def bootstrap_results(orders: pd.DataFrame, n_resamples: int = 10_000) -> dict:
+    d = scored_orders(orders)
+    late = d.loc[d["is_late"], "review_score"].to_numpy()
+    on_time = d.loc[~d["is_late"], "review_score"].to_numpy()
+    started = time.perf_counter()
+    boot = bootstrap_mean_diff(late, on_time, n_resamples=n_resamples, seed=42)
+    boot["seconds"] = time.perf_counter() - started
+    return {"bootstrap": boot, "t": welch_t_interval(late, on_time),
+            "n_late": len(late), "n_on_time": len(on_time)}
+
+
+def plot_bootstrap(r: dict) -> plt.Figure:
+    charts.apply_style()
+    boot, t = r["bootstrap"], r["t"]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.hist(boot["diffs"], bins=60, color=charts.BLUE, edgecolor="white", linewidth=0.4)
+    ax.axvspan(boot["ci_low"], boot["ci_high"], color=charts.BLUE, alpha=0.12,
+               label=f"Bootstrap 95% CI [{boot['ci_low']:.3f}, {boot['ci_high']:.3f}]")
+    for v in (t["ci_low"], t["ci_high"]):
+        ax.axvline(v, color=charts.ORANGE, linewidth=2)
+    ax.plot([], [], color=charts.ORANGE, linewidth=2,
+            label=f"Welch t-interval [{t['ci_low']:.3f}, {t['ci_high']:.3f}]")
+    ax.axvline(boot["estimate"], color=charts.INK, linewidth=1)
+    ax.annotate(f"observed {boot['estimate']:.3f}", xy=(boot["estimate"], ax.get_ylim()[1]),
+                xytext=(4, -12), textcoords="offset points", fontsize=9, color=charts.INK)
+    ax.set_title("10,000 bootstrap resamples: the difference is about -2 stars, "
+                 "and both intervals agree")
+    ax.set_xlabel("Difference in mean review score (late - on time), stars")
+    ax.set_ylabel("Number of resamples")
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    return fig
+
+
+def bootstrap_markdown(r: dict) -> str:
+    boot, t = r["bootstrap"], r["t"]
+    width_b = boot["ci_high"] - boot["ci_low"]
+    width_t = t["ci_high"] - t["ci_low"]
+    return "\n".join([
+        "# Day 3 - Task 4: Bootstrap 95% CI for the difference in mean review score",
+        "",
+        f"Difference = mean score of late orders - mean score of on-time orders "
+        f"({r['n_late']:,} late, {r['n_on_time']:,} on time). "
+        "Code: `bootstrap_mean_diff` and `welch_t_interval` in `src/olist/stats.py`.",
+        "",
+        "## Method",
+        "",
+        "**Bootstrap (written with NumPy):**",
+        "",
+        "1. Resample the late orders *with replacement* (same size as the group), and do "
+        "the same for the on-time orders.",
+        "2. Compute mean(late) - mean(on time) and store it.",
+        f"3. Repeat {boot['n_resamples']:,} times (seed 42, in batches of 200 to limit memory).",
+        "4. The 2.5th and 97.5th percentiles of the stored differences form the 95% CI "
+        "(percentile method).",
+        "",
+        "**Analytical:** Welch's t-interval, diff ± t × SE, with "
+        "SE = √(s²_late/n_late + s²_on-time/n_on-time) and Welch-Satterthwaite degrees of "
+        f"freedom (df = {t['dof']:,.0f}). Welch's version is used because the variances "
+        "differ: late scores are spread across 1-5, on-time scores sit mostly at 5.",
+        "",
+        "## Results",
+        "",
+        "| Method | Estimate | 95% CI | Width | Standard error |",
+        "|---|---:|---|---:|---:|",
+        f"| Bootstrap (percentile, {boot['n_resamples']:,} resamples) | {boot['estimate']:.4f} "
+        f"| [{boot['ci_low']:.4f}, {boot['ci_high']:.4f}] | {width_b:.4f} "
+        f"| {boot['std_error']:.4f} |",
+        f"| Welch t-interval | {t['estimate']:.4f} | [{t['ci_low']:.4f}, {t['ci_high']:.4f}] "
+        f"| {width_t:.4f} | {t['std_error']:.4f} |",
+        "",
+        "![Bootstrap distribution](../figures/day3_bootstrap_ci.png)",
+        "",
+        "## Comparison",
+        "",
+        f"- **The two intervals agree** to within {max(abs(boot['ci_low'] - t['ci_low']), abs(boot['ci_high'] - t['ci_high'])):.3f} "
+        "stars at either end. Their standard errors match too.",
+        "- **Why they agree:** review scores are far from normal, but the t-interval is about "
+        "the *mean*. With thousands of orders per group, the Central Limit Theorem makes the "
+        "sample mean almost normal (the bootstrap histogram is bell-shaped). The bootstrap "
+        "makes no normality assumption, so its agreement confirms the t-interval is valid here.",
+        "- **When they would differ:** with small groups, very skewed data, or a statistic with "
+        "no simple formula (for example the median or a ratio). There, the bootstrap is the "
+        "safer choice.",
+        f"- **Conclusion:** we are 95% confident that late orders score between "
+        f"{abs(boot['ci_high']):.2f} and {abs(boot['ci_low']):.2f} stars lower on average "
+        "than on-time orders. The interval is far from 0, which matches the tests in Task 3.",
+        f"- Runtime: {boot['n_resamples']:,} resamples took {boot['seconds']:.1f} s.",
+        "",
+    ])
+
+
+def run_bootstrap() -> None:
+    results = bootstrap_results(load_orders())
+    fig = plot_bootstrap(results)
+    fig.savefig(charts.FIGURE_DIR / "day3_bootstrap_ci.png", bbox_inches="tight")
+    plt.close(fig)
+    path = REPORT_DIR / "q1_bootstrap_ci.md"
+    path.write_text(bootstrap_markdown(results), encoding="utf-8")
+    b, t = results["bootstrap"], results["t"]
+    logger.info("Bootstrap [%.4f, %.4f] vs Welch [%.4f, %.4f] in %.1f s -> %s",
+                b["ci_low"], b["ci_high"], t["ci_low"], t["ci_high"], b["seconds"], path)
+
+
+QUESTIONS = {"q1": run_q1, "bootstrap": run_bootstrap}
 
 
 def main(argv: list[str] | None = None) -> int:
