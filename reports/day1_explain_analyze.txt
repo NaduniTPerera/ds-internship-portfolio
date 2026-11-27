@@ -1,0 +1,79 @@
+﻿Timing is on.
+DROP INDEX
+Time: 42.250 ms
+ count  
+--------
+ 830981
+(1 row)
+
+Time: 18909.112 ms (00:18.909)
+==================== BEFORE (no index) ====================
+                                                                                       QUERY PLAN                                                                                       
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate  (cost=557369.02..663113.27 rows=791030 width=44) (actual time=23437.491..23528.563 rows=7 loops=1)
+   Group Key: ((pickup_datetime)::date)
+   Buffers: shared hit=1952 read=389542, temp read=2129 written=2141
+   ->  Gather Merge  (cost=557369.02..644441.30 rows=680652 width=44) (actual time=23423.153..23526.321 rows=21 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=1952 read=389542, temp read=2129 written=2141
+         ->  Partial GroupAggregate  (cost=556368.99..564877.14 rows=340326 width=44) (actual time=22880.507..22981.576 rows=7 loops=3)
+               Group Key: ((pickup_datetime)::date)
+               Buffers: shared hit=1952 read=389542, temp read=2129 written=2141
+               ->  Sort  (cost=556368.99..557219.81 rows=340326 width=10) (actual time=22864.482..22916.099 rows=276994 loops=3)
+                     Sort Key: ((pickup_datetime)::date)
+                     Sort Method: external merge  Disk: 5200kB
+                     Buffers: shared hit=1952 read=389542, temp read=2129 written=2141
+                     Worker 0:  Sort Method: external merge  Disk: 5728kB
+                     Worker 1:  Sort Method: external merge  Disk: 6104kB
+                     ->  Parallel Seq Scan on fact_trips  (cost=0.00..519281.89 rows=340326 width=10) (actual time=2432.174..22210.544 rows=276994 loops=3)
+                           Filter: ((pickup_datetime >= '2024-03-11 00:00:00'::timestamp without time zone) AND (pickup_datetime < '2024-03-18 00:00:00'::timestamp without time zone))
+                           Rows Removed by Filter: 6500321
+                           Buffers: shared hit=1838 read=389542
+ Planning:
+   Buffers: shared hit=44
+ Planning Time: 19.303 ms
+ JIT:
+   Functions: 30
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 47.393 ms, Inlining 1066.413 ms, Optimization 627.246 ms, Emission 646.715 ms, Total 2387.767 ms
+ Execution Time: 23563.799 ms
+(28 rows)
+
+Time: 23623.664 ms (00:23.624)
+==================== CREATE INDEX ====================
+CREATE INDEX
+Time: 43915.725 ms (00:43.916)
+VACUUM
+Time: 9063.087 ms (00:09.063)
+ index_size 
+------------
+ 611 MB
+(1 row)
+
+Time: 17.865 ms
+==================== AFTER (with index) ====================
+                                                                                   QUERY PLAN                                                                                   
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=124154.71..143830.11 rows=771250 width=44) (actual time=740.467..874.320 rows=7 loops=1)
+   Group Key: ((pickup_datetime)::date)
+   Buffers: shared hit=143179 read=3187, temp read=2128 written=2141
+   ->  Sort  (cost=124154.71..126181.38 rows=810665 width=10) (actual time=724.105..789.418 rows=830981 loops=1)
+         Sort Key: ((pickup_datetime)::date)
+         Sort Method: external merge  Disk: 17024kB
+         Buffers: shared hit=143179 read=3187, temp read=2128 written=2141
+         ->  Index Only Scan using ix_fact_trips_pickup_datetime on fact_trips  (cost=0.56..30736.53 rows=810665 width=10) (actual time=242.688..551.755 rows=830981 loops=1)
+               Index Cond: ((pickup_datetime >= '2024-03-11 00:00:00'::timestamp without time zone) AND (pickup_datetime < '2024-03-18 00:00:00'::timestamp without time zone))
+               Heap Fetches: 0
+               Buffers: shared hit=143179 read=3187
+ Planning:
+   Buffers: shared hit=32
+ Planning Time: 2.860 ms
+ JIT:
+   Functions: 7
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 136.491 ms, Inlining 0.000 ms, Optimization 60.738 ms, Emission 168.440 ms, Total 365.670 ms
+ Execution Time: 1016.160 ms
+(19 rows)
+
+Time: 1024.419 ms (00:01.024)

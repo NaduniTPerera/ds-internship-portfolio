@@ -52,7 +52,7 @@ Host port 5433 is used so it does not clash with a local Postgres on 5432.
 
 | Day | Topic | Status |
 |-----|-------|--------|
-| 1   | NYC Taxi data warehouse: repo scaffold, Postgres 16 in Docker, download script, star schema | In progress |
+| 1   | NYC Taxi data warehouse: Postgres 16 in Docker, download + chunked loader, star schema, 10 KPI queries, DuckDB benchmark, indexing | Done |
 
 ## Day 1: star schema
 
@@ -102,3 +102,27 @@ Key findings (Jan-Jun 2024, 20.3M trips):
 - Median trip time is 11.7 min from Manhattan pickups and 33.7 min from Queens pickups.
 - No zone with meaningful revenue fell more than 20% from Jan to Jun. Only 3 Staten Island
   zones with 1-9 trips a month did.
+
+## Day 1: Postgres vs DuckDB, and indexing
+
+```bash
+# the 3 heaviest KPI queries in both engines (median of 3 runs, results compared)
+uv run python -m benchmark.compare_engines
+
+# one index with EXPLAIN ANALYZE before and after
+docker exec -i nyc_taxi_pg psql -U postgres -d nyc_taxi < sql/004_index_explain.sql
+```
+
+| Query | Postgres 16 | DuckDB on Parquet | Speed-up |
+|---|---:|---:|---:|
+| Q4 Busiest hour of week | 33.7 s | 1.0 s | 34x |
+| Q8 Share of airport trips | 22.3 s | 1.9 s | 12x |
+| Q9 Median duration by borough | 46.2 s | 3.2 s | 15x |
+
+Both engines return identical results. DuckDB reads only the columns a query needs from
+the columnar Parquet files, while Postgres reads whole rows. Details:
+[`reports/day1_benchmark.md`](reports/day1_benchmark.md).
+
+A covering index `(pickup_datetime) INCLUDE (total_amount)` cut a one-week dashboard query
+from 23.6 s to 1.0 s (Index Only Scan). A plain index on `pickup_datetime` was not used for
+that query. Details: [`reports/day1_index.md`](reports/day1_index.md).
